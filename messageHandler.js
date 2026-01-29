@@ -1,90 +1,59 @@
-const { MessageMedia } = require('whatsapp-web.js');
-const fs = require('fs');
-const { exec } = require('child_process');
-const { bitch } = require('btch-downloader'); 
+const { bitch } = require('btch-downloader');
 
-// Variabel memori untuk Giveaway
-let giveawayData = {
-    isActive: false,
-    participants: [],
-    mode: null 
-};
+// Memory Giveaway
+let giveawayData = { isActive: false, participants: [], mode: null };
 
-module.exports = async (msg) => {
-    const chat = await msg.getChat();
-    const isGroup = chat.isGroup;
-    const args = msg.body.trim().split(/ +/);
-    const command = args.shift().toLowerCase();
-    
-    // Agar bot tidak merespon dirinya sendiri
-    if (msg.fromMe) return;
-
+module.exports = async (sock, msg) => {
     try {
-        // --- FITUR 1: STIKER (!sticker) ---
-        if (command === '!sticker' || command === '!s') {
-            if (msg.hasMedia) {
-                const media = await msg.downloadMedia();
-                msg.reply(media, null, { 
-                    sendMediaAsSticker: true,
-                    stickerAuthor: 'Bot GitHub',
-                    stickerName: 'Sticker'
-                });
-            }
-        }
+        // Normalisasi Pesan (Agar mudah dibaca)
+        const content = JSON.stringify(msg.message);
+        const from = msg.key.remoteJid;
+        const type = Object.keys(msg.message)[0];
+        const body = (type === 'conversation') ? msg.message.conversation :
+                     (type === 'imageMessage') ? msg.message.imageMessage.caption :
+                     (type === 'videoMessage') ? msg.message.videoMessage.caption :
+                     (type === 'extendedTextMessage') ? msg.message.extendedTextMessage.text : '';
+        
+        const isGroup = from.endsWith('@g.us');
+        const sender = isGroup ? msg.key.participant : from;
+        const args = body.trim().split(/ +/);
+        const command = args.shift().toLowerCase();
 
-        // --- FITUR 2: MEDIA DOWNLOADER (!tiktok / !ig) ---
+        // Self-ignore
+        if (msg.key.fromMe) return;
+
+        // --- FITUR 1: STIKER (!sticker) ---
+        // (Baileys butuh library tambahan untuk stiker yg kompleks, 
+        // tapi ini logika dasarnya. Untuk pemula saya sarankan skip dulu atau pakai library 'wa-sticker-formatter')
+        
+        // --- FITUR 2: DOWNLOADER (!tiktok) ---
         if (['!tiktok', '!ig'].includes(command)) {
             const url = args[0];
-            if (!url) return msg.reply('Mana link-nya?');
-            msg.reply('⏳ Sedang memproses...');
+            if (!url) return sock.sendMessage(from, { text: 'Mana link-nya?' }, { quoted: msg });
+            
+            await sock.sendMessage(from, { text: '⏳ Sedang memproses...' }, { quoted: msg });
             
             try {
                 const data = await bitch(url);
                 if (data && data.url) {
-                    const media = await MessageMedia.fromUrl(data.url[0], { unsafeMime: true });
-                    msg.reply(media, null, { caption: 'Selesai!' });
-                } else {
-                    msg.reply('Gagal mengambil media.');
+                    // Kirim Video
+                    await sock.sendMessage(from, { 
+                        video: { url: data.url[0] }, 
+                        caption: 'Selesai!' 
+                    }, { quoted: msg });
                 }
             } catch (e) {
                 console.error(e);
-                msg.reply('Terjadi error saat download.');
+                await sock.sendMessage(from, { text: 'Gagal download.' }, { quoted: msg });
             }
         }
 
-        // --- FITUR 3: GIVEAWAY ---
-        if (command === '!ga' && isGroup) {
-            const subCmd = args[0];
-            
-            if (subCmd === 'start') {
-                const mode = args[1];
-                if (!['register', 'random'].includes(mode)) return msg.reply('Mode: register / random');
-                giveawayData = { isActive: true, participants: [], mode: mode };
-                msg.reply(`🎉 Giveaway mode ${mode} dimulai!`);
-            }
-            
-            if (subCmd === 'roll' && giveawayData.isActive) {
-                let pool = giveawayData.mode === 'register' ? giveawayData.participants : chat.participants.map(p => p.id._serialized);
-                if (pool.length < 1) return msg.reply('Peserta kurang!');
-                
-                const winnerId = pool[Math.floor(Math.random() * pool.length)];
-                // Mendapatkan object contact agar bisa di-mention
-                const winnerContact = await msg.client.getContactById(winnerId);
-                
-                chat.sendMessage(`Selamat @${winnerContact.id.user} kamu menang!`, { mentions: [winnerContact] });
-                giveawayData = { isActive: false, participants: [], mode: null }; // Reset
-            }
-        }
-
-        if (command === '!join' && giveawayData.isActive && giveawayData.mode === 'register') {
-            const userId = msg.author || msg.from;
-            if (!giveawayData.participants.includes(userId)) {
-                giveawayData.participants.push(userId);
-                msg.reply('Terdaftar!');
-            }
+        // --- FITUR 3: PING (Test) ---
+        if (command === '!ping') {
+            await sock.sendMessage(from, { text: 'Pong! 🚀' }, { quoted: msg });
         }
 
     } catch (error) {
-        console.error("Error pada handler:", error);
+        console.log("Error handler:", error);
     }
 };
